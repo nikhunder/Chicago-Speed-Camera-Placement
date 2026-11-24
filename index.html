@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chicago Speed Camera Safety Zones</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="ase_data.js"></script>
+<style>
+  :root { --ink:#1f2328; --muted:#5b636e; --line:#d9dde3; --bg:#ffffff; --panel:#f7f8fa; --eq:#d1495b; --open:#8a94a3; --cam:#111; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; font: 14px/1.4 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color:var(--ink); background:var(--bg); }
+  #app { display:flex; height:100%; }
+  #side { width:470px; flex:none; overflow-y:auto; background:var(--panel); border-right:1px solid var(--line); padding:18px 18px 28px; }
+  #map { flex:1; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:12.5px; margin-bottom:14px; }
+  .kpis { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; }
+  .kpi { background:#fff; border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
+  .kpi .v { font-size:22px; font-weight:650; font-variant-numeric:tabular-nums; }
+  .kpi .l { font-size:11.5px; color:var(--muted); }
+  .bar { height:10px; background:#e7eaee; border-radius:5px; position:relative; margin:4px 0 14px; overflow:hidden; }
+  .bar span { position:absolute; left:0; top:0; bottom:0; background:var(--eq); }
+  table { width:auto; table-layout:auto; border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums; }
+  th, td { white-space:nowrap; padding:5px 3px 5px 12px; border-bottom:1px solid var(--line); text-align:right; }
+  th:first-child, td:first-child { text-align:left; white-space:nowrap; padding-left:0; }
+  th { font-weight:600; color:var(--muted); font-size:11px; line-height:1.25; vertical-align:bottom; }
+  tbody tr { cursor:pointer; }
+  tbody tr:hover { background:#eef1f4; }
+  tr.total td { font-weight:650; border-top:2px solid var(--ink); }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px; border:1px solid rgba(0,0,0,.25); }
+  .bad { color:var(--eq); font-weight:650; }
+  details.method { margin-top:18px; }
+  details.method summary { cursor:pointer; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:650; }
+  details.method ul { margin-top:8px; padding-left:18px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:18px 0 6px; }
+  .ctl label { display:block; margin:3px 0; cursor:pointer; }
+  .notes { font-size:12px; color:var(--muted); }
+  .notes li { margin-bottom:5px; }
+  .legend { background:#fff; padding:8px 10px; border-radius:6px; box-shadow:0 1px 4px rgba(0,0,0,.2); font-size:12px; line-height:1.7; }
+  .legend i { display:inline-block; width:14px; height:14px; margin-right:6px; vertical-align:-3px; border-radius:50%; }
+  .leaflet-popup-content { font-size:13px; }
+  .leaflet-popup-content b { font-size:13.5px; }
+  @media (max-width: 800px) { #app { flex-direction:column-reverse; } #side { width:100%; height:48%; border-right:none; border-top:1px solid var(--line); padding:14px 16px; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <h1>Speed Camera Safety Zones</h1>
+    <div class="sub" id="sub"></div>
+    <div class="kpis" id="kpis"></div>
+    <div class="bar"><span id="capbar"></span></div>
+    <h2>By CDOT region</h2>
+    <table>
+      <thead><tr><th>Region</th><th>Eligible<br>Zones</th><th title="Zones with at least one speed camera today">Zones with<br>cameras</th><th title="Speed cameras operating now">Cameras</th><th title="Share of all camera-equipped zones citywide">% of citywide<br>total**</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="notes" id="tblnote">* MCC 9-101-050 allowed only 20% of eligible safety zones to retain a camera<br>** Each region must have at least 10% of the citywide share of cameras.</p>
+    <h2>Layers</h2>
+    <div class="ctl">
+      <label><input type="checkbox" id="L_open" checked> Zones without cameras</label>
+      <label><input type="checkbox" id="L_eq" checked> Zones with cameras</label>
+      <label><input type="checkbox" id="L_roads" checked> Extended zone roadways (to next intersection)</label>
+      <label><input type="checkbox" id="L_parks" checked> Park District parks</label>
+      <label><input type="checkbox" id="L_schools" checked> School parcels</label>
+      <label><input type="checkbox" id="L_cams" checked> Speed cameras</label>
+      <label><input type="checkbox" id="L_regions" checked> Region shading</label>
+    </div>
+    <details class="method">
+      <summary>Method</summary>
+      <ul class="notes" id="notes"></ul>
+    </details>
+  </aside>
+  <div id="map"></div>
+</div>
+<script>
+const D = window.ASE, M = D.meta;
+const REG = { North:'#bfe9f7', East:'#f7c8ec', West:'#f8d9cc', Southwest:'#c9f0c4', Southeast:'#cfc8f5', South:'#f7f0b8' };
+const fmt = n => n.toLocaleString('en-US');
+
+document.getElementById('sub').textContent =
+  'Chicago automated speed enforcement vs. the MCC 9-101-050 limits. Built ' + M.built + '.';
+document.getElementById('kpis').innerHTML = [
+  [fmt(M.eligible), 'Eligible safety zones'],
+  [fmt(M.cap), 'Max zones with cameras (20%)'],
+  [fmt(M.equipped), 'Zones with cameras now'],
+  [fmt(M.cap - M.equipped), 'Zones that could still be added'],
+].map(([v,l]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+document.getElementById('capbar').style.width = (100 * M.equipped / M.cap).toFixed(1) + '%';
+
+const rows = D.summary;
+document.getElementById('rows').innerHTML = rows.map(r => {
+  const tot = r.region === 'Citywide';
+  const withCams = tot ? `${fmt(r.equipped_zones)} (of ${fmt(M.cap)}<br>allowed*)` : r.equipped_zones;
+  const sw = tot ? '' : `<span class="sw" style="background:${REG[r.region]}"></span>`;
+  return `<tr class="${tot ? 'total' : ''}" data-r="${r.region}"><td>${sw}${r.region}</td><td>${fmt(r.eligible_zones)}</td><td>${withCams}</td><td>${r.cameras}</td><td>${tot ? '100%' : r.share_of_equipped + '%'}</td></tr>`;
+}).join('');
+
+document.getElementById('notes').innerHTML = [
+  `One zone per qualifying school or Park District park. Co-located schools within 100 ft count as one campus zone.`,
+  `Schools: CPS district, charter and options schools (SY2025-26) plus private schools teaching grade 1 or higher (NCES Private School Survey 2023-24).`,
+  `Parks: Chicago Park District boundaries, radius from the property line.`,
+  `Each zone includes every roadway inside the 1/8-mile radius, extended to the next intersection (drawn to the intersection center line), per 625 ILCS 5/11-208.8(a).`,
+  `Cap = 20% of eligible zones, rounded down. Floor = 10% of the cap per region. Regions follow CDOT's 2024 "Safety Zone Region", per 9-101-050.`,
+].map(t => `<li>${t}</li>`).join('');
+
+const map = L.map('map', { preferCanvas:true }).setView([41.84, -87.68], 11);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+  attribution:'Tiles &copy; Esri &mdash; Esri, HERE, Garmin, OpenStreetMap contributors', maxZoom:16 }).addTo(map);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', { maxZoom:16, pane:'shadowPane' }).addTo(map);
+
+const regionLayer = L.geoJSON(D.regions, { style: f => ({ color:'#555', weight:1.2, fillColor:REG[f.properties.region], fillOpacity:.35 }), interactive:false }).addTo(map);
+const parkLayer = L.geoJSON(D.parks, { style:{ color:'#3f8f3a', weight:.6, fillColor:'#6cbf5f', fillOpacity:.35 }, interactive:false }).addTo(map);
+const schoolLayer = L.geoJSON(D.schools || { type:'FeatureCollection', features:[] }, { style:{ color:'#7a5c12', weight:.6, fillColor:'#e0b84a', fillOpacity:.45 }, interactive:false }).addTo(map);
+const roadLayer = L.geoJSON(D.roads, { style: f => ({ color: f.properties.eq ? '#d1495b' : '#5c6773', weight: f.properties.eq ? 2.2 : 1.2, opacity:.8 }), interactive:false });
+const roadById = new Map(D.roads.features.map(f => [f.properties.c, f]));
+const camsByZone = {};
+D.cameras.features.forEach(f => { const z = f.properties.zone_id; if (z) (camsByZone[z] = camsByZone[z] || []).push(f); });
+const SEL = '#1d4ed8';
+const selLayer = L.layerGroup();
+let selected = null;
+function clearSelection() { selLayer.clearLayers(); map.removeLayer(selLayer); selected = null; }
+function selectZone(f, layer) {
+  clearSelection();
+  selected = f.properties.zone_id;
+  const ids = (f.properties.chains || '').split(',').filter(Boolean).map(Number);
+  const roads = ids.map(id => roadById.get(id)).filter(Boolean);
+  L.geoJSON(f, { style:{ color:SEL, weight:2.5, dashArray:'6 4', fill:false }, interactive:false }).addTo(selLayer);
+  L.geoJSON({ type:'FeatureCollection', features:roads }, { style:{ color:'#fff', weight:7, opacity:.9 }, interactive:false }).addTo(selLayer);
+  L.geoJSON({ type:'FeatureCollection', features:roads }, { style:{ color:SEL, weight:4, opacity:1 }, interactive:false }).addTo(selLayer);
+  (camsByZone[selected] || []).forEach(c => {
+    const [x, y] = c.geometry.coordinates;
+    L.circleMarker([y, x], { radius:7, color:SEL, weight:3, fillColor:'#111', fillOpacity:1, interactive:false }).addTo(selLayer);
+  });
+  selLayer.addTo(map);
+  if (map.hasLayer(camLayer)) camLayer.bringToFront();
+}
+
+function zonePopup(p) {
+  return `<b>${p.name}</b><br>${p.zone_type} zone ${p.zone_id} &middot; ${p.region} region<br>` +
+    `${p.community_area}${p.address ? ' &middot; ' + p.address : ''}<br>` +
+    `<span style="color:#5b636e">${p.detail || ''}</span><br>` +
+    `Roadway in zone: ${p.road_mi} mi<br>` +
+    (p.equipped ? `<b style="color:#d1495b">${p.n_cameras} camera${p.n_cameras>1?'s':''}</b>: ${p.camera_ids}` : 'No camera');
+}
+const mk = eq => L.geoJSON(D.zones, {
+  filter: f => f.properties.equipped === eq,
+  style: eq ? { color:'#d1495b', weight:1.6, fillColor:'#d1495b', fillOpacity:.22 }
+            : { color:'#6b7480', weight:.6, fillColor:'#9aa3ad', fillOpacity:.08 },
+  onEachFeature: (f, l) => {
+    l.bindPopup(zonePopup(f.properties));
+    l.on('click', () => selectZone(f, l));
+    l.on('popupclose', () => { if (selected === f.properties.zone_id) clearSelection(); });
+  }
+});
+const openLayer = mk(false).addTo(map), eqLayer = mk(true).addTo(map);
+roadLayer.addTo(map);
+
+const camLayer = L.geoJSON(D.cameras, {
+  pointToLayer: (f, ll) => L.circleMarker(ll, { radius:3.5, color:'#fff', weight:1, fillColor:'#111', fillOpacity:1 }),
+  onEachFeature: (f, l) => { const p = f.properties; l.bindPopup(
+    `<b>${p.location_id}</b> &middot; ${p.address}<br>Approach: ${p.approach || '-'} &middot; Live ${p.go_live}<br>` +
+    `Zone: ${p.zone_name || '<i>none found</i>'}<br><span style="color:#5b636e">${p.assign_method}</span>`); }
+}).addTo(map);
+
+const layers = { L_open:openLayer, L_eq:eqLayer, L_roads:roadLayer, L_parks:parkLayer, L_schools:schoolLayer, L_cams:camLayer, L_regions:regionLayer };
+Object.entries(layers).forEach(([id, lyr]) => document.getElementById(id).addEventListener('change', e => {
+  e.target.checked ? lyr.addTo(map) : map.removeLayer(lyr);
+  if (map.hasLayer(camLayer)) camLayer.bringToFront();
+}));
+
+document.querySelectorAll('#rows tr').forEach(tr => tr.addEventListener('click', () => {
+  const r = tr.dataset.r;
+  if (r === 'Citywide') { map.fitBounds(regionLayer.getBounds()); return; }
+  regionLayer.eachLayer(l => { if (l.feature.properties.region === r) map.fitBounds(l.getBounds()); });
+}));
+
+const legend = L.control({ position:'bottomright' });
+legend.onAdd = () => { const d = L.DomUtil.create('div', 'legend'); d.innerHTML =
+  `<div><i style="background:rgba(209,73,91,.35);border:1.5px solid #d1495b"></i>Zone with camera</div>
+   <div><i style="background:rgba(154,163,173,.15);border:1px solid #6b7480"></i>Eligible zone, no camera</div>
+   <div><i style="background:#d1495b;border-radius:0;height:3px;vertical-align:3px"></i>Extended roadway, zone with camera</div>
+   <div><i style="background:#5c6773;border-radius:0;height:2px;vertical-align:3px"></i>Extended roadway, zone without camera</div>
+   <div><i style="background:#1d4ed8;border-radius:0;height:4px;vertical-align:2px"></i>Selected zone and its roadways</div>
+   <div><i style="background:#111;border:1px solid #fff;width:9px;height:9px;margin:0 8px 0 3px"></i>Speed camera</div>
+   <div><i style="background:rgba(108,191,95,.5);border-radius:2px"></i>Park District park</div>
+   <div><i style="background:rgba(224,184,74,.6);border:1px solid #7a5c12;border-radius:2px"></i>School parcel</div>`; return d; };
+legend.addTo(map);
+map.fitBounds(regionLayer.getBounds());
+// Deep link: index.html#zone=S0123 opens that zone
+const m = location.hash.match(/zone=([A-Z0-9]+)/);
+if (m) [eqLayer, openLayer].forEach(g => g.eachLayer(l => {
+  if (l.feature.properties.zone_id === m[1]) { map.fitBounds(l.getBounds(), { padding:[120,120] }); selectZone(l.feature, l); l.openPopup(); }
+}));
+</script>
+</body>
+</html>
